@@ -1,0 +1,60 @@
+#!/usr/bin/env bash
+
+# VARIABLES
+# SAMBA_USERS="user1 user2"
+# SAMBA_USER_user1="user1's password"
+# SAMBA_USER_user2="user2's password"
+# SAMBA_USERID_user1=1000  ## <- UID
+# SAMBA_USERID_user2=1001  ## <- UID
+# SAMBA_USERDIR_user1="/data/private/user1"
+# SAMBA_USERDIR_user2="/data/private/user2"
+
+if [ -z "$SAMBA_USERS" ]
+then
+    echo "CRITICAL: No users configured" >&2
+    exit 1
+fi
+
+USERS=($SAMBA_USERS)
+
+TMP=$(mktemp)
+
+for u in "${USERS[@]}"
+do
+    PWD_ENV=\$SAMBA_USER_$u
+    PWD=$(eval echo $PWD_ENV)
+
+    ID_ENV=\$SAMBA_USERID_$u
+    ID=$(eval echo $ID_ENV)
+
+    HDIR_ENV=\$SAMBA_USERDIR_$u
+    HDIR=$(eval echo $HDIR_ENV)
+
+    useradd -M -u $ID $u
+    echo -e -n "${PWD}\n${PWD}" | smbpasswd -a $u
+
+    echo "[$u]" >> $TMP
+    echo '    comment = %U home directory' >> $TMP
+    echo '    writable = yes' >> $TMP
+    echo "    valid users = $u" >> $TMP
+    echo "    path = ${HDIR}" >> $TMP
+    echo '' >> $TMP
+done
+
+SED_SCRIPT=$(mktemp)
+echo '/<USERS>/ {' > $SED_SCRIPT
+echo "  r $TMP" >> $SED_SCRIPT
+echo "  d" >> $SED_SCRIPT
+echo "}" >> $SED_SCRIPT
+
+sed -f $SED_SCRIPT -i /etc/samba/smb.conf
+
+rm -f $TMP $SED_SCRIPT
+
+/etc/init.d/samba start
+
+PID=$(cat /var/run/samba/smbd.pid)
+while [ ! -z $(ps --pid=$PID | grep -o $PID) ]
+do
+   sleep 10
+done
